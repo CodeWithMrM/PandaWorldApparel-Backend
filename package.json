@@ -1,0 +1,49 @@
+{
+  "name": "ecommerce-backend",
+  "version": "1.0.0",
+  "description": "Production-ready e-commerce backend API (Node.js, Express, PostgreSQL, Prisma, JWT, PayFast)",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "node prisma/seed.js",
+    "postinstall": "prisma generate"
+  },
+  "keywords": [
+    "ecommerce",
+    "api",
+    "express",
+    "prisma",
+    "postgresql",
+    "payfast"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@clerk/express": "^1.7.81",
+    "@prisma/client": "^5.20.0",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "express-rate-limit": "^7.4.0",
+    "express-validator": "^7.2.0",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "svix": "^1.24.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4",
+    "prisma": "^5.20.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  }
+}
