@@ -4,7 +4,7 @@ require('dotenv').config();
  * Centralised, validated access to environment variables.
  * Fail fast on boot if something critical is missing.
  */
-const required = ['DATABASE_URL', 'CLERK_SECRET_KEY', 'CLERK_WEBHOOK_SECRET'];
+const required = ['DATABASE_URL', 'CLERK_SECRET_KEY', 'CLERK_WEBHOOK_SECRET', 'PAYSTACK_SECRET_KEY', 'PAYSTACK_PUBLIC_KEY'];
 
 for (const key of required) {
   if (!process.env[key]) {
@@ -46,6 +46,11 @@ module.exports = {
     passphrase: process.env.PAYFAST_PASSPHRASE || '',
     sandbox: (process.env.PAYFAST_SANDBOX || 'true') === 'true',
     host: process.env.PAYFAST_HOST || 'sandbox.payfast.co.za',
+  },
+
+  paystack: {
+    publicKey: process.env.PAYSTACK_PUBLIC_KEY,
+    secretKey: process.env.PAYSTACK_SECRET_KEY,
   },
 
   rateLimit: {

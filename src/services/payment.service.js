@@ -2,17 +2,16 @@ const prisma = require('../config/prisma');
 const ApiError = require('../utils/ApiError');
 const orderService = require('./order.service');
 const {
-  buildPaymentPayload,
-  getPayfastProcessUrl,
-  verifyItnSignature,
-} = require('../utils/payfast.util');
+  initializeTransaction,
+  verifyTransaction,
+  verifyWebhookSignature,
+} = require('../utils/paystack.util');
 
 /**
- * Builds the PayFast payment fields + target URL for a given order.
- * The client is expected to auto-submit these fields as a POST form to
- * `processUrl` (standard PayFast "onsite"/redirect flow).
+ * Initialize a Paystack transaction for an order.
+ * Returns the authorization URL and access code needed for checkout.
  */
-async function createPaymentSession(userId, orderId) {
+async function createPaystackCheckout(userId, orderId) {
   const order = await orderService.getOrderById(orderId, userId);
 
   if (order.paymentStatus === 'PAID') {
@@ -21,44 +20,61 @@ async function createPaymentSession(userId, orderId) {
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
 
-  const fields = buildPaymentPayload({ order, user });
-  const processUrl = getPayfastProcessUrl();
+  const transactionData = await initializeTransaction({
+    orderId,
+    amount: Number(order.total),
+    userEmail: user.email,
+    userName: user.name,
+  });
 
-  return { fields, processUrl };
+  // Return authorization URL and access code for frontend redirect
+  return {
+    authorizationUrl: transactionData.authorization_url,
+    accessCode: transactionData.access_code,
+    reference: transactionData.reference,
+  };
 }
 
 /**
- * Handles PayFast's server-to-server Instant Transaction Notification (ITN).
- * PayFast calls this endpoint directly (not the user's browser) once a
- * payment's status changes, so this is the source of truth for updating
- * order.paymentStatus — never trust the browser return_url alone.
+ * Handles Paystack webhook verification.
+ * Paystack calls this endpoint when a payment is successful.
+ * This is the source of truth for updating order.paymentStatus.
  */
-async function handleItn(body) {
-  const isValidSignature = verifyItnSignature(body);
+async function handleWebhook(body, signature) {
+  // Verify webhook signature
+  const isValidSignature = verifyWebhookSignature(JSON.stringify(body), signature);
   if (!isValidSignature) {
-    throw ApiError.badRequest('Invalid PayFast signature');
+    throw ApiError.badRequest('Invalid Paystack webhook signature');
   }
 
-  const orderId = body.m_payment_id;
-  const paymentStatus = body.payment_status; // 'COMPLETE', 'FAILED', etc.
-  const pfPaymentId = body.pf_payment_id;
+  // Only process successful charge events
+  if (body.event !== 'charge.success') {
+    return { message: 'Event not processed', event: body.event };
+  }
+
+  const { data } = body;
+  const orderId = data.metadata.orderId;
+  const reference = data.reference;
 
   if (!orderId) {
-    throw ApiError.badRequest('Missing m_payment_id in ITN payload');
+    throw ApiError.badRequest('Missing orderId in webhook metadata');
   }
 
   const order = await prisma.order.findUnique({ where: { id: orderId } });
   if (!order) {
-    throw ApiError.notFound('Order referenced in ITN not found');
+    throw ApiError.notFound('Order referenced in webhook not found');
   }
 
-  if (paymentStatus === 'COMPLETE') {
-    await orderService.updatePaymentStatus(orderId, 'PAID', pfPaymentId);
+  // Verify transaction with Paystack API as final confirmation
+  const transaction = await verifyTransaction(reference);
+
+  if (transaction.status === 'success') {
+    await orderService.updatePaymentStatus(orderId, 'PAID', reference);
+    return { orderId, paymentStatus: 'PAID' };
   } else {
-    await orderService.updatePaymentStatus(orderId, 'FAILED', pfPaymentId);
+    await orderService.updatePaymentStatus(orderId, 'FAILED', reference);
+    return { orderId, paymentStatus: 'FAILED' };
   }
-
-  return { orderId, paymentStatus };
 }
 
-module.exports = { createPaymentSession, handleItn };
+module.exports = { createPaystackCheckout, handleWebhook };

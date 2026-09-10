@@ -4,44 +4,47 @@ const ApiError = require('../utils/ApiError');
 const paymentService = require('../services/payment.service');
 const env = require('../config/env');
 
-// POST /api/payments/payfast  { orderId }
-// Returns the PayFast process URL + signed form fields. The frontend should
-// auto-submit these as a POST form to `processUrl` to redirect the
-// customer into PayFast's hosted checkout.
-const createPayfastSession = asyncHandler(async (req, res) => {
+// POST /api/payments/paystack/checkout — initialize Paystack transaction
+// Returns the authorization URL for client redirect
+const createPaystackCheckout = asyncHandler(async (req, res) => {
   const { orderId } = req.body;
   if (!orderId) throw ApiError.badRequest('orderId is required');
 
-  const session = await paymentService.createPaymentSession(req.user.id, orderId);
-  return new ApiResponse(200, session, 'PayFast payment session created').send(res);
+  const checkout = await paymentService.createPaystackCheckout(req.user.id, orderId);
+  return new ApiResponse(200, checkout, 'Paystack checkout initialized').send(res);
 });
 
-// POST /api/payments/notify — PayFast server-to-server ITN webhook.
-// Must always respond quickly with 200 or PayFast will retry.
-const handleNotify = asyncHandler(async (req, res) => {
-  try {
-    await paymentService.handleItn(req.body);
-  } catch (err) {
-    // Log but still acknowledge receipt so PayFast doesn't hammer retries
-    // for a payload we've deliberately rejected (e.g. bad signature).
-    // eslint-disable-next-line no-console
-    console.error('[payfast:itn] rejected notification:', err.message);
+// POST /api/payments/webhook/paystack — Paystack webhook
+// Called by Paystack after successful payment
+const handlePaystackWebhook = asyncHandler(async (req, res) => {
+  const signature = req.headers['x-paystack-signature'];
+  if (!signature) {
+    throw ApiError.badRequest('Missing X-Paystack-Signature header');
   }
-  res.status(200).send('OK');
+
+  try {
+    const result = await paymentService.handleWebhook(req.body, signature);
+    return new ApiResponse(200, result, 'Webhook processed').send(res);
+  } catch (err) {
+    // Log but still acknowledge receipt to prevent Paystack retries
+    // eslint-disable-next-line no-console
+    console.error('[paystack:webhook] rejected notification:', err.message);
+    throw err;
+  }
 });
 
-// GET /api/payments/success — browser return_url after a successful payment.
-// The ITN webhook is the source of truth for payment status; this just
-// sends the shopper back to the storefront.
+// GET /api/payments/success — browser return after successful payment
 const handleSuccess = asyncHandler(async (req, res) => {
-  const orderId = req.query.m_payment_id || req.query.orderId;
-  res.redirect(`${env.clientUrl}/checkout/success${orderId ? `?orderId=${orderId}` : ''}`);
+  const { orderId, reference } = req.query;
+  res.redirect(
+    `${env.clientUrl}/checkout/success${orderId ? `?orderId=${orderId}&reference=${reference}` : ''}`
+  );
 });
 
-// GET /api/payments/cancel — browser cancel_url
+// GET /api/payments/cancel — browser cancel redirect
 const handleCancel = asyncHandler(async (req, res) => {
-  const orderId = req.query.m_payment_id || req.query.orderId;
+  const { orderId } = req.query;
   res.redirect(`${env.clientUrl}/checkout/cancelled${orderId ? `?orderId=${orderId}` : ''}`);
 });
 
-module.exports = { createPayfastSession, handleNotify, handleSuccess, handleCancel };
+module.exports = { createPaystackCheckout, handlePaystackWebhook, handleSuccess, handleCancel };

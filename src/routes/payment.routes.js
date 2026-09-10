@@ -5,11 +5,13 @@ const paymentController = require('../controllers/payment.controller');
 const { authenticate } = require('../middleware/auth.middleware');
 const { writeLimiter, paymentNotifyLimiter } = require('../middleware/rateLimiter.middleware');
 
-// Customer must be authenticated to initiate a payment for their order.
-router.post('/payfast', authenticate, writeLimiter, paymentController.createPayfastSession);
+// Paystack checkout: customer must be authenticated
+router.post('/paystack/checkout', authenticate, writeLimiter, paymentController.createPaystackCheckout);
 
-// PayFast calls these directly — no auth headers will be present.
-router.post('/notify', paymentNotifyLimiter, paymentController.handleNotify);
+// Paystack webhook: called directly by Paystack (no auth headers)
+router.post('/webhook/paystack', paymentNotifyLimiter, paymentController.handlePaystackWebhook);
+
+// Return URLs after payment
 router.get('/success', paymentController.handleSuccess);
 router.get('/cancel', paymentController.handleCancel);
 
