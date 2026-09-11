@@ -12,5 +12,6 @@ router.put('/profile', authenticate, validate(updateProfileValidator), userContr
 // Admin only
 router.get('/', authenticate, authorize('ADMIN'), userController.listUsers);
 router.delete('/:id', authenticate, authorize('ADMIN'), userController.deleteUser);
+router.patch('/:id/role', authenticate, authorize('ADMIN'), userController.updateUserRole);
 
 module.exports = router;

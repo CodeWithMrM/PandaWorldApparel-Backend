@@ -24,4 +24,11 @@ const deleteUser = asyncHandler(async (req, res) => {
   return new ApiResponse(200, null, 'User deleted successfully').send(res);
 });
 
-module.exports = { getProfile, updateProfile, listUsers, deleteUser };
+// Admin only: update user role
+const updateUserRole = asyncHandler(async (req, res) => {
+  const { role } = req.body;
+  const user = await userService.updateUserRole(req.params.id, role);
+  return new ApiResponse(200, user, 'User role updated successfully').send(res);
+});
+
+module.exports = { getProfile, updateProfile, listUsers, deleteUser, updateUserRole };

@@ -1,3 +1,4 @@
+const { clerkClient } = require('@clerk/express');
 const prisma = require('../config/prisma');
 const ApiError = require('../utils/ApiError');
 const { safeUserSelect } = require('./auth.service');
@@ -68,4 +69,30 @@ async function deleteUser(userId, requestingUserId) {
   await prisma.user.delete({ where: { id: userId } });
 }
 
-module.exports = { getProfile, updateProfile, listUsers, deleteUser };
+/**
+ * Updates a user's role in Clerk. This triggers the user.updated webhook,
+ * which syncs the change to the local database. Only admins can call this.
+ */
+async function updateUserRole(userId, role) {
+  if (!['ADMIN', 'CUSTOMER'].includes(role)) {
+    throw ApiError.badRequest('Invalid role. Must be ADMIN or CUSTOMER');
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw ApiError.notFound('User not found');
+
+  // Update in Clerk (source of truth), which triggers the webhook to sync back
+  await clerkClient.users.updateUser(user.clerkId, {
+    publicMetadata: { role },
+  });
+
+  // Return the updated local user (webhook will sync within seconds)
+  const updatedUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: safeUserSelect,
+  });
+
+  return updatedUser;
+}
+
+module.exports = { getProfile, updateProfile, listUsers, deleteUser, updateUserRole };
