@@ -7,91 +7,186 @@ const prisma = require("../config/prisma");
 /**
  * Clerk middleware.
  *
- * Mount this globally in app.js BEFORE your API routes:
+ * This should be mounted globally in app.js BEFORE your API routes:
  *
  * app.use(withClerk);
  * app.use('/api', routes);
+ *
+ * It reads the Clerk Bearer token from the request and
+ * makes the authentication state available through getAuth(req).
  */
 const withClerk = clerkMiddleware();
 
 /**
  * Authenticate the current request.
  *
- * Flow:
+ * Authentication flow:
  *
- * 1. Clerk middleware reads the Authorization: Bearer <token>
- * 2. getAuth(req) extracts the authenticated Clerk user
- * 3. We retrieve the Clerk user from Clerk's backend API
- * 4. publicMetadata.role is used as the authoritative role
- * 5. We find/create the corresponding Prisma User
- * 6. req.user is populated for the rest of the application
+ * Browser
+ *   ↓
+ * Clerk session token
+ *   ↓
+ * Authorization: Bearer <token>
+ *   ↓
+ * Clerk middleware
+ *   ↓
+ * getAuth(req)
+ *   ↓
+ * Clerk user
+ *   ↓
+ * Prisma User
+ *   ↓
+ * req.user
  */
 const authenticate = asyncHandler(async (req, res, next) => {
+  console.log("");
   console.log("========== PANDAWORLD AUTH ==========");
 
-  // Debug only — NEVER log the actual token.
+  /*
+   * Never log the actual Authorization header/token.
+   * We only check whether it exists.
+   */
   console.log(
     "Authorization header:",
     req.headers.authorization ? "PRESENT" : "MISSING",
   );
 
-  const auth = getAuth(req);
+  /*
+   * Get Clerk authentication state.
+   */
+  let auth;
 
-  console.log("Clerk auth state:", {
-    userId: auth.userId || null,
-    sessionId: auth.sessionId || null,
-    isAuthenticated: auth.isAuthenticated,
-  });
+  try {
+    auth = getAuth(req);
 
-  console.log("=====================================");
+    console.log("Clerk authentication:", {
+      userId: auth.userId || null,
+      sessionId: auth.sessionId || null,
+      isAuthenticated: auth.isAuthenticated,
+    });
+  } catch (error) {
+    console.error("CLERK getAuth() FAILED:", {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    });
+
+    throw ApiError.unauthorized("Unable to authenticate with Clerk");
+  }
 
   const { userId } = auth;
 
+  /*
+   * No Clerk user means the request is not authenticated.
+   */
   if (!userId) {
+    console.error("AUTHENTICATION FAILED: Clerk did not provide a userId");
+
     throw ApiError.unauthorized("Authentication required");
   }
 
-  // Retrieve the authoritative user from Clerk.
-  const clerkUser = await clerkClient.users.getUser(userId);
+  console.log("Clerk user ID:", userId);
 
-  if (!clerkUser) {
-    throw ApiError.unauthorized("Clerk user could not be found");
+  /*
+   * Retrieve the user directly from Clerk.
+   *
+   * This is important because publicMetadata.role is
+   * being used as the authoritative role.
+   */
+  let clerkUser;
+
+  try {
+    clerkUser = await clerkClient.users.getUser(userId);
+
+    console.log("Clerk user retrieved:", {
+      id: clerkUser.id,
+      email: clerkUser.emailAddresses?.[0]?.emailAddress || null,
+      firstName: clerkUser.firstName || null,
+      lastName: clerkUser.lastName || null,
+      publicMetadata: clerkUser.publicMetadata || {},
+    });
+  } catch (error) {
+    console.error("CLERK getUser() FAILED:", {
+      name: error.name,
+      message: error.message,
+      code: error.code,
+      status: error.status,
+      stack: error.stack,
+    });
+
+    throw ApiError.unauthorized("Unable to retrieve Clerk user");
   }
 
-  /**
-   * Clerk Public Metadata
+  /*
+   * Resolve the application role.
    *
-   * Expected:
+   * Clerk:
    *
+   * publicMetadata:
    * {
-   *   "role": "ADMIN"
+   *   role: "ADMIN"
    * }
+   *
+   * becomes:
+   *
+   * ADMIN
+   *
+   * Anything other than ADMIN becomes CUSTOMER.
    */
   const clerkRole = clerkUser.publicMetadata?.role;
 
   const role = clerkRole === "ADMIN" ? "ADMIN" : "CUSTOMER";
 
-  console.log("Authenticated Clerk user:", {
-    userId: clerkUser.id,
-    email: clerkUser.emailAddresses?.[0]?.emailAddress,
+  console.log("Role resolution:", {
     clerkRole,
     resolvedRole: role,
   });
 
-  /**
+  /*
    * Find the corresponding Prisma user.
    */
-  let user = await prisma.user.findUnique({
-    where: {
-      clerkId: userId,
-    },
-  });
+  let user;
 
-  /**
-   * Safety net:
+  try {
+    console.log("Looking up Prisma user with clerkId:", userId);
+
+    user = await prisma.user.findUnique({
+      where: {
+        clerkId: userId,
+      },
+    });
+
+    console.log(
+      "Prisma user lookup:",
+      user
+        ? {
+            id: user.id,
+            clerkId: user.clerkId,
+            email: user.email,
+            role: user.role,
+          }
+        : "USER NOT FOUND",
+    );
+  } catch (error) {
+    console.error("");
+    console.error("========== PRISMA findUnique FAILED ==========");
+    console.error({
+      name: error.name,
+      message: error.message,
+      code: error.code,
+      meta: error.meta,
+      stack: error.stack,
+    });
+    console.error("==============================================");
+
+    throw ApiError.badRequest("Database request error");
+  }
+
+  /*
+   * If the Clerk user exists but the Prisma user does not,
+   * create the Prisma user as a safety net.
    *
-   * Normally your Clerk webhook should create the Prisma user.
-   * If the webhook hasn't arrived yet, create the user here.
+   * Normally your Clerk webhook should create this row.
    */
   if (!user) {
     const email =
@@ -101,64 +196,140 @@ const authenticate = asyncHandler(async (req, res, next) => {
       [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(" ") ||
       "New User";
 
-    console.log("Creating missing Prisma user:", {
-      clerkId: userId,
-      email,
-      role,
-    });
+    try {
+      console.log("");
+      console.log("========== CREATING PRISMA USER ==========");
 
-    user = await prisma.user.create({
-      data: {
+      console.log({
         clerkId: userId,
         email,
         name,
-        phone: clerkUser.phoneNumbers?.[0]?.phoneNumber || null,
         role,
-      },
-    });
+      });
 
-    /**
+      user = await prisma.user.create({
+        data: {
+          clerkId: userId,
+          email,
+          name,
+          phone: clerkUser.phoneNumbers?.[0]?.phoneNumber || null,
+          role,
+        },
+      });
+
+      console.log("Prisma user created:", {
+        id: user.id,
+        clerkId: user.clerkId,
+        email: user.email,
+        role: user.role,
+      });
+
+      console.log("==========================================");
+    } catch (error) {
+      console.error("");
+      console.error("========== PRISMA user.create FAILED ==========");
+
+      console.error({
+        name: error.name,
+        message: error.message,
+        code: error.code,
+        meta: error.meta,
+        stack: error.stack,
+      });
+
+      console.error("================================================");
+
+      throw ApiError.badRequest("Database request error");
+    }
+
+    /*
      * Create the user's cart.
      *
-     * Cart creation should not make authentication fail,
-     * so errors are intentionally ignored.
+     * A cart failure should NOT prevent authentication,
+     * so this operation is intentionally non-fatal.
      */
-    await prisma.cart
-      .create({
+    try {
+      console.log("Creating cart for Prisma user:", user.id);
+
+      await prisma.cart.create({
         data: {
           userId: user.id,
         },
-      })
-      .catch((error) => {
-        console.warn("Could not create cart for new user:", error.message);
       });
+
+      console.log("Cart created successfully");
+    } catch (error) {
+      console.warn("");
+      console.warn("========== PRISMA cart.create FAILED ==========");
+
+      console.warn({
+        name: error.name,
+        message: error.message,
+        code: error.code,
+        meta: error.meta,
+      });
+
+      console.warn("Cart creation failed, but authentication will continue.");
+
+      console.warn("================================================");
+    }
   }
 
-  /**
-   * Keep Prisma's cached role synchronized with Clerk.
+  /*
+   * Keep Prisma's role synchronized with Clerk.
    *
-   * Clerk is the source of truth.
+   * Clerk publicMetadata is the source of truth.
    */
   if (user.role !== role) {
-    console.log("Synchronizing Prisma role:", {
-      userId: user.id,
-      oldRole: user.role,
-      newRole: role,
-    });
+    try {
+      console.log("");
+      console.log("========== SYNCHRONIZING USER ROLE ==========");
 
-    user = await prisma.user.update({
-      where: {
-        id: user.id,
-      },
-      data: {
-        role,
-      },
-    });
+      console.log({
+        prismaUserId: user.id,
+        oldRole: user.role,
+        newRole: role,
+      });
+
+      user = await prisma.user.update({
+        where: {
+          id: user.id,
+        },
+        data: {
+          role,
+        },
+      });
+
+      console.log("Prisma role synchronized:", user.role);
+
+      console.log("=============================================");
+    } catch (error) {
+      console.error("");
+      console.error("========== PRISMA user.update FAILED ==========");
+
+      console.error({
+        name: error.name,
+        message: error.message,
+        code: error.code,
+        meta: error.meta,
+        stack: error.stack,
+      });
+
+      console.error("================================================");
+
+      throw ApiError.badRequest("Database request error");
+    }
   }
 
-  /**
-   * Normalize the user object exposed to the rest
-   * of the Express application.
+  /*
+   * Normalize the Prisma user into req.user.
+   *
+   * Controllers can now use:
+   *
+   * req.user.id
+   * req.user.clerkId
+   * req.user.email
+   * req.user.role
    */
   req.user = {
     id: user.id,
@@ -170,32 +341,62 @@ const authenticate = asyncHandler(async (req, res, next) => {
     createdAt: user.createdAt,
   };
 
-  console.log("PandaWorld authenticated user:", {
+  console.log("");
+  console.log("========== PANDAWORLD USER ==========");
+
+  console.log({
     id: req.user.id,
     clerkId: req.user.clerkId,
     email: req.user.email,
     role: req.user.role,
   });
 
+  console.log("======================================");
+  console.log("");
+
+  /*
+   * Authentication successful.
+   */
   next();
 });
 
 /**
- * Restrict a route to one or more roles.
+ * Authorize one or more application roles.
  *
- * Examples:
+ * Example:
  *
- * authorize('ADMIN')
+ * router.get(
+ *   '/users',
+ *   authenticate,
+ *   authorize('ADMIN'),
+ *   controller
+ * );
+ *
+ * Multiple roles:
  *
  * authorize('ADMIN', 'CUSTOMER')
  */
 const authorize = (...roles) => {
   return (req, res, next) => {
+    /*
+     * authenticate() must run before authorize().
+     */
     if (!req.user) {
       return next(ApiError.unauthorized("Authentication required"));
     }
 
+    /*
+     * Check whether the authenticated user's
+     * role is allowed.
+     */
     if (!roles.includes(req.user.role)) {
+      console.warn("Authorization denied:", {
+        userId: req.user.id,
+        clerkId: req.user.clerkId,
+        role: req.user.role,
+        requiredRoles: roles,
+      });
+
       return next(
         ApiError.forbidden("You do not have permission to perform this action"),
       );
