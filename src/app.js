@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const path = require('path');
 
 const env = require('./config/env');
 const routes = require('./routes');
@@ -35,9 +34,6 @@ app.use('/api/webhooks', express.raw({ type: 'application/json' }), webhookRoute
 // PayFast ITN posts as application/x-www-form-urlencoded.
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
-
-// Statically serve locally-uploaded product images.
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Apply a general rate limiter across the whole API surface.
 // Stricter, endpoint-specific limiters are layered on top in the route files.

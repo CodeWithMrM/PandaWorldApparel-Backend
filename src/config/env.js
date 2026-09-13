@@ -4,7 +4,16 @@ require('dotenv').config();
  * Centralised, validated access to environment variables.
  * Fail fast on boot if something critical is missing.
  */
-const required = ['DATABASE_URL', 'CLERK_SECRET_KEY', 'CLERK_WEBHOOK_SECRET', 'PAYSTACK_SECRET_KEY', 'PAYSTACK_PUBLIC_KEY'];
+const required = [
+  'DATABASE_URL',
+  'CLERK_SECRET_KEY',
+  'CLERK_WEBHOOK_SECRET',
+  'PAYSTACK_SECRET_KEY',
+  'PAYSTACK_PUBLIC_KEY',
+  'IMAGEKIT_PUBLIC_KEY',
+  'IMAGEKIT_PRIVATE_KEY',
+  'IMAGEKIT_URL_ENDPOINT',
+];
 
 for (const key of required) {
   if (!process.env[key]) {
@@ -35,9 +44,10 @@ module.exports = {
     .split(',')
     .map((o) => o.trim()),
 
-  storage: {
-    driver: process.env.STORAGE_DRIVER || 'local',
-    maxUploadSizeMb: parseInt(process.env.MAX_UPLOAD_SIZE_MB, 10) || 5,
+  imagekit: {
+    publicKey: process.env.IMAGEKIT_PUBLIC_KEY,
+    privateKey: process.env.IMAGEKIT_PRIVATE_KEY,
+    urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT,
   },
 
   payfast: {

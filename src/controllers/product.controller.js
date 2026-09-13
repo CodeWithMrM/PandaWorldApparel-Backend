@@ -13,12 +13,12 @@ const getProduct = asyncHandler(async (req, res) => {
 });
 
 const createProduct = asyncHandler(async (req, res) => {
-  const product = await productService.createProduct(req.body, req.file);
+  const product = await productService.createProduct(req.body);
   return new ApiResponse(201, product, 'Product created').send(res);
 });
 
 const updateProduct = asyncHandler(async (req, res) => {
-  const product = await productService.updateProduct(req.params.id, req.body, req.file);
+  const product = await productService.updateProduct(req.params.id, req.body);
   return new ApiResponse(200, product, 'Product updated').send(res);
 });
 

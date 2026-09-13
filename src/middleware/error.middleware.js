@@ -9,7 +9,7 @@ const notFound = (req, res, next) => {
 };
 
 /**
- * Converts known error types (Prisma, Multer, JWT, etc.) into ApiError so
+ * Converts known error types (Prisma, JWT, etc.) into ApiError so
  * the final handler can respond consistently.
  */
 const normalizeError = (err) => {
@@ -30,11 +30,6 @@ const normalizeError = (err) => {
       return ApiError.badRequest('Related record does not exist');
     }
     return ApiError.badRequest('Database request error');
-  }
-
-  // Multer file upload errors
-  if (err.name === 'MulterError') {
-    return ApiError.badRequest(`Upload error: ${err.message}`);
   }
 
   // JWT errors that slip through

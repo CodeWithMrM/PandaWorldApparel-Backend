@@ -7,7 +7,7 @@ A production-ready e-commerce REST API built with **Node.js, Express, PostgreSQL
 - **Runtime:** Node.js (>=18) + Express.js
 - **Database:** PostgreSQL via Prisma ORM
 - **Auth:** [Clerk](https://clerk.com) (frontend handles sign-up/sign-in; this API verifies Clerk session tokens and syncs users via webhook)
-- **Uploads:** Multer (local disk by default, cloud-storage stub included)
+- **Product images:** ImageKit direct browser uploads with server-issued admin authentication
 - **Payments:** PayFast (South Africa)
 - **Security:** Helmet, CORS, express-rate-limit, express-validator
 
@@ -17,12 +17,11 @@ A production-ready e-commerce REST API built with **Node.js, Express, PostgreSQL
 src/
 ├── controllers/     # Request handlers (thin — call services)
 ├── routes/           # Express routers
-├── middleware/        # auth, validation, error handling, rate limiting, uploads
+├── middleware/        # auth, validation, error handling, rate limiting
 ├── services/          # Business logic + Prisma queries
 ├── validators/         # express-validator rule sets
 ├── utils/              # ApiError, ApiResponse, asyncHandler, jwt, payfast, pagination
 ├── config/             # env loader, Prisma client singleton
-├── uploads/             # local product image uploads (gitignored)
 ├── app.js
 └── server.js
 prisma/
@@ -74,7 +73,9 @@ See `.env.example` for the full list. Key ones:
 | `CLERK_PUBLISHABLE_KEY` | From Clerk Dashboard → API Keys (used by your frontend, kept here for reference) |
 | `CLERK_WEBHOOK_SECRET` | From Clerk Dashboard → Webhooks → your endpoint's signing secret |
 | `CORS_ORIGIN` | Comma-separated list of allowed frontend origins |
-| `STORAGE_DRIVER` | `local` or `cloud` (cloud is a stub — see below) |
+| `IMAGEKIT_PUBLIC_KEY` | ImageKit public upload key |
+| `IMAGEKIT_PRIVATE_KEY` | ImageKit private key (backend/Railway only) |
+| `IMAGEKIT_URL_ENDPOINT` | ImageKit URL endpoint, e.g. `https://ik.imagekit.io/your_id` |
 | `PAYFAST_MERCHANT_ID` / `PAYFAST_MERCHANT_KEY` | From your PayFast merchant account |
 | `PAYFAST_PASSPHRASE` | Optional, but recommended — set in your PayFast account settings too |
 | `PAYFAST_HOST` | `sandbox.payfast.co.za` for testing, `www.payfast.co.za` for production |
@@ -137,9 +138,9 @@ The webhook route is mounted with a **raw body parser** in `app.js`, ahead of th
 
 If you don't want to set up `ngrok`/webhooks yet, you don't strictly have to: `authenticate` lazily creates a local `User` row on first request if one doesn't exist yet, using data from the Clerk API. You'll just miss out on `user.updated`/`user.deleted` sync until the webhook is wired up.
 
-## 6. File Uploads
+## 6. Product Image Uploads
 
-`STORAGE_DRIVER=local` (default) writes product images to `src/uploads/` and serves them at `/uploads/<filename>`. Setting `STORAGE_DRIVER=cloud` is a **stub**: `src/services/storage.service.js` has clearly marked spots to wire up S3/Cloudinary/etc. Until implemented, it logs a warning and falls back to local URLs so the app keeps working.
+The Admin application obtains short-lived upload authentication from `GET /api/imagekit/auth`, which requires both a Clerk session and the `ADMIN` role. It then uploads the selected image directly to ImageKit. The API stores only the returned HTTPS `imageUrl` and ImageKit `imageFileId`; the ImageKit private key never leaves the backend. Product replacement and deletion perform ImageKit cleanup only after the database operation succeeds, so an ImageKit cleanup failure cannot corrupt a product record.
 
 ## 7. PayFast Integration Flow
 
@@ -197,7 +198,7 @@ Registration and login happen entirely via Clerk on the frontend — there are n
 |---|---|---|---|
 | GET | `/products` | Public | List products — supports `page`, `limit`, `search`, `categoryId`, `sortBy=price\|name`, `order=asc\|desc` |
 | GET | `/products/:id` | Public | Get one product |
-| POST | `/products` | Admin | Create product (multipart/form-data, field `image` for the file) |
+| POST | `/products` | Admin | Create product with JSON fields, including optional `imageUrl` and `imageFileId` from ImageKit |
 | PUT | `/products/:id` | Admin | Update product |
 | DELETE | `/products/:id` | Admin | Delete product |
 
@@ -263,7 +264,7 @@ Example: `GET /api/products?search=phone&categoryId=abc123&sortBy=price&order=as
 - CORS restricted to `CORS_ORIGIN`.
 - All input validated with express-validator before hitting business logic.
 - The Clerk webhook is signature-verified (Svix) before any data is written.
-- Global error handler normalizes Prisma/Multer/Clerk errors into a consistent JSON shape and never leaks stack traces outside development.
+- Global error handler normalizes Prisma/Clerk errors into a consistent JSON shape and never leaks stack traces outside development.
 - Rate limiting as described above.
 - Order totals and line-item prices are snapshotted server-side from the database at checkout — the client can never set its own price/total.
 
