@@ -1,61 +1,165 @@
-const { clerkMiddleware, getAuth, clerkClient } = require('@clerk/express');
-const ApiError = require('../utils/ApiError');
-const asyncHandler = require('../utils/asyncHandler');
-const prisma = require('../config/prisma');
+const { clerkMiddleware, getAuth, clerkClient } = require("@clerk/express");
+
+const ApiError = require("../utils/ApiError");
+const asyncHandler = require("../utils/asyncHandler");
+const prisma = require("../config/prisma");
 
 /**
- * Clerk's official middleware. Mounted globally in app.js — it parses the
- * session token (if present) and attaches auth state to `req.auth`, but
- * does NOT reject unauthenticated requests by itself. Use `authenticate`
- * below on routes that require a logged-in user.
+ * Clerk middleware.
+ *
+ * Mount this globally in app.js BEFORE your API routes:
+ *
+ * app.use(withClerk);
+ * app.use('/api', routes);
  */
 const withClerk = clerkMiddleware();
 
 /**
- * Requires a valid Clerk session, resolves the corresponding local `User`
- * row (creating it as a safety net if the webhook hasn't fired yet), and
- * attaches a normalised `req.user` object used throughout the app.
+ * Authenticate the current request.
  *
- * The ADMIN/CUSTOMER role is treated as authoritative from Clerk's
- * `publicMetadata.role` — not from a token claim the client could tamper
- * with — so we resolve it via the Clerk backend SDK on each request.
+ * Flow:
  *
- * Perf tip: to avoid the extra Clerk API round-trip on every request,
- * configure a Clerk JWT template that includes `public_metadata` as a
- * session claim, then read `getAuth(req).sessionClaims.publicMetadata`
- * instead of calling `clerkClient.users.getUser`.
+ * 1. Clerk middleware reads the Authorization: Bearer <token>
+ * 2. getAuth(req) extracts the authenticated Clerk user
+ * 3. We retrieve the Clerk user from Clerk's backend API
+ * 4. publicMetadata.role is used as the authoritative role
+ * 5. We find/create the corresponding Prisma User
+ * 6. req.user is populated for the rest of the application
  */
 const authenticate = asyncHandler(async (req, res, next) => {
-  const { userId } = getAuth(req);
+  console.log("========== PANDAWORLD AUTH ==========");
+
+  // Debug only — NEVER log the actual token.
+  console.log(
+    "Authorization header:",
+    req.headers.authorization ? "PRESENT" : "MISSING",
+  );
+
+  const auth = getAuth(req);
+
+  console.log("Clerk auth state:", {
+    userId: auth.userId || null,
+    sessionId: auth.sessionId || null,
+    isAuthenticated: auth.isAuthenticated,
+  });
+
+  console.log("=====================================");
+
+  const { userId } = auth;
 
   if (!userId) {
-    throw ApiError.unauthorized('Authentication required');
+    throw ApiError.unauthorized("Authentication required");
   }
 
+  // Retrieve the authoritative user from Clerk.
   const clerkUser = await clerkClient.users.getUser(userId);
-  const role = clerkUser.publicMetadata?.role === 'ADMIN' ? 'ADMIN' : 'CUSTOMER';
 
-  let user = await prisma.user.findUnique({ where: { clerkId: userId } });
+  if (!clerkUser) {
+    throw ApiError.unauthorized("Clerk user could not be found");
+  }
 
+  /**
+   * Clerk Public Metadata
+   *
+   * Expected:
+   *
+   * {
+   *   "role": "ADMIN"
+   * }
+   */
+  const clerkRole = clerkUser.publicMetadata?.role;
+
+  const role = clerkRole === "ADMIN" ? "ADMIN" : "CUSTOMER";
+
+  console.log("Authenticated Clerk user:", {
+    userId: clerkUser.id,
+    email: clerkUser.emailAddresses?.[0]?.emailAddress,
+    clerkRole,
+    resolvedRole: role,
+  });
+
+  /**
+   * Find the corresponding Prisma user.
+   */
+  let user = await prisma.user.findUnique({
+    where: {
+      clerkId: userId,
+    },
+  });
+
+  /**
+   * Safety net:
+   *
+   * Normally your Clerk webhook should create the Prisma user.
+   * If the webhook hasn't arrived yet, create the user here.
+   */
   if (!user) {
-    // Normally the Clerk webhook (user.created) creates this row. This is
-    // just a fallback in case the request beats the webhook, or the
-    // webhook was missed.
+    const email =
+      clerkUser.emailAddresses?.[0]?.emailAddress || `${userId}@unknown.local`;
+
+    const name =
+      [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(" ") ||
+      "New User";
+
+    console.log("Creating missing Prisma user:", {
+      clerkId: userId,
+      email,
+      role,
+    });
+
     user = await prisma.user.create({
       data: {
         clerkId: userId,
-        email: clerkUser.emailAddresses?.[0]?.emailAddress || `${userId}@unknown.local`,
-        name: [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') || 'New User',
+        email,
+        name,
         phone: clerkUser.phoneNumbers?.[0]?.phoneNumber || null,
         role,
       },
     });
-    await prisma.cart.create({ data: { userId: user.id } }).catch(() => {});
-  } else if (user.role !== role) {
-    // Keep the local cache in sync if metadata changed since the last webhook.
-    user = await prisma.user.update({ where: { id: user.id }, data: { role } });
+
+    /**
+     * Create the user's cart.
+     *
+     * Cart creation should not make authentication fail,
+     * so errors are intentionally ignored.
+     */
+    await prisma.cart
+      .create({
+        data: {
+          userId: user.id,
+        },
+      })
+      .catch((error) => {
+        console.warn("Could not create cart for new user:", error.message);
+      });
   }
 
+  /**
+   * Keep Prisma's cached role synchronized with Clerk.
+   *
+   * Clerk is the source of truth.
+   */
+  if (user.role !== role) {
+    console.log("Synchronizing Prisma role:", {
+      userId: user.id,
+      oldRole: user.role,
+      newRole: role,
+    });
+
+    user = await prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        role,
+      },
+    });
+  }
+
+  /**
+   * Normalize the user object exposed to the rest
+   * of the Express application.
+   */
   req.user = {
     id: user.id,
     clerkId: user.clerkId,
@@ -66,23 +170,43 @@ const authenticate = asyncHandler(async (req, res, next) => {
     createdAt: user.createdAt,
   };
 
+  console.log("PandaWorld authenticated user:", {
+    id: req.user.id,
+    clerkId: req.user.clerkId,
+    email: req.user.email,
+    role: req.user.role,
+  });
+
   next();
 });
 
 /**
- * Restricts access to the given roles. Use after `authenticate`.
- * Usage: authorize('ADMIN') or authorize('ADMIN', 'CUSTOMER')
+ * Restrict a route to one or more roles.
+ *
+ * Examples:
+ *
+ * authorize('ADMIN')
+ *
+ * authorize('ADMIN', 'CUSTOMER')
  */
-const authorize =
-  (...roles) =>
-  (req, res, next) => {
+const authorize = (...roles) => {
+  return (req, res, next) => {
     if (!req.user) {
-      return next(ApiError.unauthorized('Authentication required'));
+      return next(ApiError.unauthorized("Authentication required"));
     }
+
     if (!roles.includes(req.user.role)) {
-      return next(ApiError.forbidden('You do not have permission to perform this action'));
+      return next(
+        ApiError.forbidden("You do not have permission to perform this action"),
+      );
     }
+
     next();
   };
+};
 
-module.exports = { withClerk, authenticate, authorize };
+module.exports = {
+  withClerk,
+  authenticate,
+  authorize,
+};

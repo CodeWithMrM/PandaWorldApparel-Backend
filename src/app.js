@@ -29,9 +29,7 @@ app.use(
 
 app.use(morgan(env.nodeEnv === 'development' ? 'dev' : 'combined'));
 
-// --- Clerk webhook: MUST be mounted with a raw body parser, and BEFORE
-// the global express.json() below, because Svix needs the untouched raw
-// request body to verify the webhook signature. ---
+
 app.use('/api/webhooks', express.raw({ type: 'application/json' }), webhookRoutes);
 
 // PayFast ITN posts as application/x-www-form-urlencoded.
