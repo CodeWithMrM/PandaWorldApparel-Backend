@@ -1,5 +1,5 @@
-const env = require('../config/env');
-const ApiError = require('../utils/ApiError');
+const env = require("../config/env");
+const ApiError = require("../utils/ApiError");
 
 /**
  * 404 handler — catches any request that didn't match a route.
@@ -9,56 +9,96 @@ const notFound = (req, res, next) => {
 };
 
 /**
- * Converts known error types (Prisma, JWT, etc.) into ApiError so
- * the final handler can respond consistently.
+ * Converts known error types (Prisma, JWT, etc.) into ApiError
+ * so the final handler can respond consistently.
  */
-const normalizeError = (err) => {
-  if (err instanceof ApiError) return err;
+const normalizeError = (err, req) => {
+  // Already a normalized ApiError
+  if (err instanceof ApiError) {
+    return err;
+  }
 
-  // Prisma known request errors (e.g. unique constraint violation, FK violation)
-  if (err.code && typeof err.code === 'string' && err.code.startsWith('P')) {
-    if (err.code === 'P2002') {
+  // Prisma known request errors
+  if (err.code && typeof err.code === "string" && err.code.startsWith("P")) {
+    // Log the original Prisma error so it is visible in Railway logs.
+    // This is especially useful while diagnosing production database issues.
+    // eslint-disable-next-line no-console
+    console.error("[PRISMA ERROR]", {
+      method: req?.method,
+      url: req?.originalUrl,
+      code: err.code,
+      message: err.message,
+      meta: err.meta,
+      stack: err.stack,
+    });
+
+    // Unique constraint violation
+    if (err.code === "P2002") {
       const target = err.meta?.target;
+
       return ApiError.conflict(
-        `A record with this ${Array.isArray(target) ? target.join(', ') : 'value'} already exists`
+        `A record with this ${
+          Array.isArray(target) ? target.join(", ") : "value"
+        } already exists`,
       );
     }
-    if (err.code === 'P2025') {
-      return ApiError.notFound('Record not found');
+
+    // Record not found
+    if (err.code === "P2025") {
+      return ApiError.notFound("Record not found");
     }
-    if (err.code === 'P2003') {
-      return ApiError.badRequest('Related record does not exist');
+
+    // Foreign key constraint violation
+    if (err.code === "P2003") {
+      return ApiError.badRequest("Related record does not exist");
     }
-    return ApiError.badRequest('Database request error');
+
+    // Other Prisma/database errors
+    return ApiError.badRequest("Database request error");
   }
 
-  // JWT errors that slip through
-  if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-    return ApiError.unauthorized('Invalid or expired token');
+  // JWT errors
+  if (err.name === "JsonWebTokenError" || err.name === "TokenExpiredError") {
+    return ApiError.unauthorized("Invalid or expired token");
   }
 
-  return new ApiError(err.statusCode || 500, err.message || 'Internal Server Error');
+  // Unknown/unhandled error
+  return new ApiError(
+    err.statusCode || 500,
+    err.message || "Internal Server Error",
+  );
 };
 
 /**
- * Final global error handler. Must be registered last, after all routes.
+ * Final global error handler.
+ * Must be registered last, after all routes.
  */
 // eslint-disable-next-line no-unused-vars
 const errorHandler = (err, req, res, next) => {
-  const apiError = normalizeError(err);
+  const apiError = normalizeError(err, req);
 
+  // Log unexpected errors and all 5xx errors.
   if (!apiError.isOperational || apiError.statusCode >= 500) {
     // eslint-disable-next-line no-console
-    console.error('[error]', err);
+    console.error("[ERROR]", {
+      method: req?.method,
+      url: req?.originalUrl,
+      statusCode: apiError.statusCode,
+      message: err?.message,
+      stack: err?.stack,
+    });
   }
 
   res.status(apiError.statusCode || 500).json({
     success: false,
     statusCode: apiError.statusCode || 500,
-    message: apiError.message || 'Internal Server Error',
+    message: apiError.message || "Internal Server Error",
     errors: apiError.errors || undefined,
-    stack: env.nodeEnv === 'development' ? err.stack : undefined,
+    stack: env.nodeEnv === "development" ? err.stack : undefined,
   });
 };
 
-module.exports = { notFound, errorHandler };
+module.exports = {
+  notFound,
+  errorHandler,
+};
