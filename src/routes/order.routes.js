@@ -10,6 +10,8 @@ const {
   updateOrderStatusValidator,
 } = require('../validators/order.validator');
 
+router.get('/track/:id', orderController.trackOrder);
+
 router.use(authenticate);
 
 router.post('/', writeLimiter, validate(createOrderValidator), orderController.createOrder);

@@ -25,10 +25,16 @@ const getOrder = asyncHandler(async (req, res) => {
   return new ApiResponse(200, order, 'Order fetched').send(res);
 });
 
+// GET /api/orders/track/:id — public, limited order tracking details
+const trackOrder = asyncHandler(async (req, res) => {
+  const order = await orderService.getOrderTrackingById(req.params.id);
+  return new ApiResponse(200, order, 'Order tracking fetched').send(res);
+});
+
 // PATCH /api/orders/:id/status — admin only
 const updateOrderStatus = asyncHandler(async (req, res) => {
   const order = await orderService.updateOrderStatus(req.params.id, req.body.status);
   return new ApiResponse(200, order, 'Order status updated').send(res);
 });
 
-module.exports = { createOrder, getOrders, getOrder, updateOrderStatus };
+module.exports = { createOrder, getOrders, getOrder, trackOrder, updateOrderStatus };

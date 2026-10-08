@@ -131,6 +131,21 @@ async function getOrderById(orderId, userId = null) {
   return order;
 }
 
+async function getOrderTrackingById(orderId) {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    select: {
+      id: true,
+      total: true,
+      status: true,
+      paymentStatus: true,
+      createdAt: true,
+    },
+  });
+  if (!order) throw ApiError.notFound('Order not found');
+  return order;
+}
+
 async function updateOrderStatus(orderId, status) {
   const order = await prisma.order.findUnique({ where: { id: orderId } });
   if (!order) throw ApiError.notFound('Order not found');
@@ -160,6 +175,7 @@ module.exports = {
   getUserOrders,
   getAllOrders,
   getOrderById,
+  getOrderTrackingById,
   updateOrderStatus,
   updatePaymentStatus,
 };
