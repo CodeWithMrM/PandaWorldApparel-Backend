@@ -104,6 +104,7 @@ model CartItem {
   id        String   @id @default(cuid())
   cartId    String
   productId String
+  size      String?
   quantity  Int      @default(1)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -111,7 +112,7 @@ model CartItem {
   cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  @@unique([cartId, productId])
+  @@unique([cartId, productId, size])
   @@index([cartId])
   @@map("cart_items")
 }
@@ -140,6 +141,7 @@ model OrderItem {
   id        String   @id @default(cuid())
   orderId   String
   productId String
+  size      String?
   quantity  Int
   price     Decimal  @db.Decimal(10, 2) // price at time of purchase
   createdAt DateTime @default(now())

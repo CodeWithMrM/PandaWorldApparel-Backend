@@ -26,11 +26,20 @@ async function createOrderFromCart(userId, { shippingAddress }) {
       throw ApiError.badRequest('Your cart is empty');
     }
 
-    // Validate stock for every item before writing anything.
+    const quantitiesByProduct = new Map();
     for (const item of cart.items) {
-      if (item.product.stock < item.quantity) {
+      quantitiesByProduct.set(
+        item.productId,
+        (quantitiesByProduct.get(item.productId) || 0) + item.quantity
+      );
+    }
+
+    // Stock is tracked per product, so count every size together.
+    for (const [productId, quantity] of quantitiesByProduct) {
+      const product = cart.items.find((item) => item.productId === productId).product;
+      if (product.stock < quantity) {
         throw ApiError.badRequest(
-          `Insufficient stock for "${item.product.name}" (available: ${item.product.stock})`
+          `Insufficient stock for "${product.name}" (available: ${product.stock})`
         );
       }
     }
@@ -50,6 +59,7 @@ async function createOrderFromCart(userId, { shippingAddress }) {
         items: {
           create: cart.items.map((item) => ({
             productId: item.productId,
+            size: item.size,
             quantity: item.quantity,
             price: item.product.price, // snapshot price at purchase time
           })),
@@ -59,10 +69,10 @@ async function createOrderFromCart(userId, { shippingAddress }) {
     });
 
     // Decrement stock for each purchased product.
-    for (const item of cart.items) {
+    for (const [productId, quantity] of quantitiesByProduct) {
       await tx.product.update({
-        where: { id: item.productId },
-        data: { stock: { decrement: item.quantity } },
+        where: { id: productId },
+        data: { stock: { decrement: quantity } },
       });
     }
 

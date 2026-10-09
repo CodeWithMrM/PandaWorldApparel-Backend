@@ -1,7 +1,14 @@
 const { body } = require('express-validator');
+const { PRODUCT_SIZES } = require('../utils/productSizes');
 
 const addCartItemValidator = [
   body('productId').trim().notEmpty().withMessage('productId is required'),
+  body('size')
+    .trim()
+    .notEmpty()
+    .withMessage('size is required')
+    .isIn(PRODUCT_SIZES)
+    .withMessage(`size must be one of: ${PRODUCT_SIZES.join(', ')}`),
   body('quantity')
     .optional()
     .isInt({ min: 1 })

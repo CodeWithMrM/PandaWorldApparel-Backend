@@ -1,5 +1,6 @@
 const prisma = require('../config/prisma');
 const ApiError = require('../utils/ApiError');
+const { PRODUCT_SIZES } = require('../utils/productSizes');
 
 const cartInclude = {
   items: {
@@ -38,31 +39,36 @@ async function getCart(userId) {
   return withTotals(cart);
 }
 
-async function addItem(userId, { productId, quantity = 1 }) {
+async function addItem(userId, { productId, quantity = 1, size }) {
+  if (!PRODUCT_SIZES.includes(size)) {
+    throw ApiError.badRequest(`size must be one of: ${PRODUCT_SIZES.join(', ')}`);
+  }
+
   const product = await prisma.product.findUnique({ where: { id: productId } });
   if (!product) throw ApiError.notFound('Product not found');
-  if (product.stock < quantity) {
+
+  const cart = await getOrCreateCart(userId);
+  const existingQuantity = await prisma.cartItem.aggregate({
+    where: { cartId: cart.id, productId },
+    _sum: { quantity: true },
+  });
+  const newTotalQuantity = (existingQuantity._sum.quantity || 0) + Number(quantity);
+  if (product.stock < newTotalQuantity) {
     throw ApiError.badRequest(`Only ${product.stock} unit(s) of "${product.name}" available`);
   }
 
-  const cart = await getOrCreateCart(userId);
-
   const existingItem = await prisma.cartItem.findUnique({
-    where: { cartId_productId: { cartId: cart.id, productId } },
+    where: { cartId_productId_size: { cartId: cart.id, productId, size } },
   });
 
   if (existingItem) {
-    const newQuantity = existingItem.quantity + Number(quantity);
-    if (product.stock < newQuantity) {
-      throw ApiError.badRequest(`Only ${product.stock} unit(s) of "${product.name}" available`);
-    }
     await prisma.cartItem.update({
       where: { id: existingItem.id },
-      data: { quantity: newQuantity },
+      data: { quantity: existingItem.quantity + Number(quantity) },
     });
   } else {
     await prisma.cartItem.create({
-      data: { cartId: cart.id, productId, quantity: Number(quantity) },
+      data: { cartId: cart.id, productId, size, quantity: Number(quantity) },
     });
   }
 
@@ -75,7 +81,11 @@ async function updateItem(userId, itemId, quantity) {
   if (!item) throw ApiError.notFound('Cart item not found');
 
   const product = await prisma.product.findUnique({ where: { id: item.productId } });
-  if (product.stock < quantity) {
+  const otherSizes = await prisma.cartItem.aggregate({
+    where: { cartId: cart.id, productId: item.productId, id: { not: itemId } },
+    _sum: { quantity: true },
+  });
+  if (product.stock < (otherSizes._sum.quantity || 0) + Number(quantity)) {
     throw ApiError.badRequest(`Only ${product.stock} unit(s) of "${product.name}" available`);
   }
 
